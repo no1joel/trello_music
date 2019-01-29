@@ -37,9 +37,29 @@ def get_cards():
     return cards
 
 
+def get_probabilities(length):
+    """Return probabilities for a given length."""
+    probabilities = [x ** -1 for x in range(1, length + 1)]
+    ratio = sum(probabilities)
+    return [x / ratio for x in probabilities]
+
+
+def plot_probabilities(length):
+    """
+    Plot probabilities.
+
+    Used for debugging and visualising.
+    """
+    from matplotlib import pyplot
+
+    probabilities = get_probabilities(length)
+    pyplot.plot(range(1, length + 1), probabilities)
+    pyplot.show()
+
+
 def choose_card(cards):
     """Choose a card, weighted with the first cards more likely."""
-    probabilities = (1 / x for x in range(len(cards)))
+    probabilities = get_probabilities(len(cards))
     return numpy.random.choice(cards, p=probabilities)
 
 
@@ -96,4 +116,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--plot", type=int)
+
+    args = parser.parse_args()
+    if args.plot:
+        plot_probabilities(args.plot)
+    else:
+        main()
