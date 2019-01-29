@@ -1,2 +1,4 @@
 __pycache__
-env
+settings.py
+.mypy_cache
+.vscode
