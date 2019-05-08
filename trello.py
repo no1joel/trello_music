@@ -32,10 +32,15 @@ def get_cards(buy):
     list_id = BUY_LIST if buy else LISTEN_LIST
 
     fields = ["id", "name", "desc", "shortUrl"]
-    url = "https://api.trello.com/1/lists/{}/cards?fields={}&key={}&token={}".format(
-        list_id, ",".join(fields), KEY, TOKEN
-    )
-    response = requests.get(url)
+    params = {
+        "fields": fields,
+        "key": KEY,
+        "token": TOKEN,
+        "attachments": "true",
+        "attachment_fields": ["url"],
+    }
+    url = f"https://api.trello.com/1/lists/{list_id}/cards"
+    response = requests.get(url, params)
     cards = response.json()
     return cards
 
@@ -69,12 +74,24 @@ def choose_card(cards):
 
 def print_card(card):
     """Print a card to output."""
+
     print("=" * 16)
     print_safe(card["name"])
+
     print("~" * 16)
     print_safe(card["desc"])
+
+    attachments = card["attachments"]
+    if attachments:
+        print("~" * 16)
+        print("Attachments:")
+        for attachment in attachments:
+            print(attachment["url"])
+
     print("~" * 16)
+    print("Card:")
     print_safe(card["shortUrl"])
+
     print("=" * 16)
 
     print("\n")
