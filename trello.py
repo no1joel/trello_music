@@ -1,33 +1,37 @@
 """Return a random trello from the stuff to check out list that I have."""
 
 import sys
+from typing import List, Optional, Sequence
 
 import numpy
 import requests
 
 import settings
+from action import Action
+from card import Card
+from card_deserializer import CardDeserializer
+from trello_action import TrelloAction
 
 KEY = settings.KEY
 TOKEN = settings.TOKEN
 LISTEN_LIST = settings.LISTEN_LIST
 BUY_LIST = settings.BUY_LIST
 
+ACTIONS: List[Action] = [
+    Action("k", "[K]eep", None),
+    Action("a", "[A]rchive", TrelloAction({"closed": True})),
+    Action("b", "[B]uy (later)", TrelloAction({"idList": BUY_LIST})),
+    Action("t", "Move to [t]op", TrelloAction({"pos": "top"})),
+    Action("q", "[Q]uit", None),
+]
 
-ACTIONS = {
-    "k": {"description": "[K]eep"},
-    "a": {"description": "[A]rchive", "data": {"closed": True}},
-    "b": {"description": "[B]uy (later)", "data": {"idList": BUY_LIST}},
-    "t": {"description": "Move to [t]op", "data": {"pos": "top"}},
-    "q": {"description": "[Q]uit!"},
-}
 
-
-def print_safe(something):
+def print_safe(something: str) -> None:
     """Print a string after encoding / decoding to remove unsafe chars."""
     print(something.encode("ascii", "replace").decode("ascii"))
 
 
-def get_cards(buy):
+def get_cards(buy: bool) -> List[Card]:
     """Fetch all cards from the trello list."""
     list_id = BUY_LIST if buy else LISTEN_LIST
 
@@ -41,19 +45,23 @@ def get_cards(buy):
     }
     url = f"https://api.trello.com/1/lists/{list_id}/cards"
     response = requests.get(url, params)
-    cards = response.json()
+    json_data = response.json()
+    cards = CardDeserializer().from_json(json_data)
+
     return cards
 
 
-def get_probabilities(length):
+def get_probabilities(length: int) -> List[float]:
     """Return probabilities for a given length."""
+
     probabilities = [x ** -1 for x in range(1, length + 1)]
     ratio = sum(probabilities)
     probs = [x / ratio for x in probabilities]
+
     return probs
 
 
-def plot_probabilities(length):
+def plot_probabilities(length: int) -> None:
     """
     Plot probabilities.
 
@@ -66,56 +74,62 @@ def plot_probabilities(length):
     pyplot.show()
 
 
-def choose_card(cards):
+def choose_card(cards: Sequence[Card]) -> Card:
     """Choose a card, weighted with the first cards more likely."""
+
     probabilities = get_probabilities(len(cards))
-    return numpy.random.choice(cards, p=probabilities)
+
+    choice = numpy.random.choice(cards, p=probabilities)
+    assert isinstance(choice, Card)
+    return choice
 
 
-def print_card(card):
+def print_card(card: Card) -> None:
     """Print a card to output."""
 
     print("=" * 16)
-    print_safe(card["name"])
+    print_safe(card.name)
 
     print("~" * 16)
-    print_safe(card["desc"])
+    print_safe(card.desc)
 
-    attachments = card["attachments"]
+    attachments = card.attachments
     if attachments:
         print("~" * 16)
         print("Attachments:")
         for attachment in attachments:
-            print(attachment["url"])
+            print(attachment.url)
 
     print("~" * 16)
     print("Card:")
-    print_safe(card["shortUrl"])
+    print_safe(card.short_url)
 
     print("=" * 16)
 
     print("\n")
 
 
-def get_action_from_user():
+def get_action_from_user() -> Action:
     """Get action from user input."""
-    action = ""
+    action: Optional[Action] = None
 
-    while action not in ACTIONS:
-        keys = list(ACTIONS.keys())
-        prompt = ", ".join(ACTIONS[k]["description"] for k in keys[:-1])
-        prompt += " or {}".format(ACTIONS[keys[-1]]["description"])
+    while action is None:
+        prompt = ", ".join(action.description for action in ACTIONS[:-1])
+        prompt += " or {}".format(ACTIONS[-1].description)
         prompt += ":\n"
-        action = input(prompt)
-        action = action.strip().lower()
 
-        if action not in ACTIONS:
+        key = input(prompt)
+        key = key.strip().lower()
+
+        try:
+            action = next(action for action in ACTIONS if action.key == key)
+        except StopIteration:
             print("U wot m8?")
 
     return action
 
 
-def print_card_stats(cards, card):
+def print_card_stats(cards: Sequence[Card], card: Card) -> None:
     """Print card index and probability."""
 
     card_count = len(cards)
@@ -127,7 +141,7 @@ def print_card_stats(cards, card):
     print("{:4d}/{:4d}, {:3.2f}%".format(card_index, card_count, card_percent))
 
 
-def interactive(buy=False, reverse=False):
+def interactive(buy: bool = False, reverse: bool = False) -> None:
     """Fetch cards, show to user, get action, perform action."""
     while True:
         cards = get_cards(buy)
@@ -140,27 +154,27 @@ def interactive(buy=False, reverse=False):
         try:
             print_card(card)
         except UnicodeEncodeError:
-            print("Error printing card", card["shortUrl"])
+            print("Error printing card", card.short_url)
             exit()
 
         card_url = "https://api.trello.com/1/cards/{}?key={}&token={}".format(
-            card["id"], KEY, TOKEN
+            card.id, KEY, TOKEN
         )
 
         action = get_action_from_user()
-        print(ACTIONS[action]["description"])
+        print(action.description)
         sys.stdout.flush()
 
-        data = ACTIONS[action].get("data")
-        if data:
-            requests.put(card_url, json=data)
-        elif action == "q":
+        trello_action = action.trello_action
+        if trello_action:
+            requests.put(card_url, json=trello_action.request_data)
+        elif action.key == "q":
             exit()
 
         print("\n" * 16)
 
 
-def main():
+def main() -> None:
     """Handle running as a script."""
     import argparse
 
