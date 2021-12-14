@@ -1,7 +1,10 @@
 """Return a random trello from the stuff to check out list that I have."""
 
+import re
 import sys
-from typing import List, Optional, Sequence
+import threading
+import time
+from typing import List, Optional, Sequence, Set
 
 import numpy
 import requests
@@ -10,17 +13,16 @@ import settings
 from action import Action
 from card import Card
 from card_deserializer import CardDeserializer
+from card_fetcher import CardFetcher
 from trello_action import TrelloAction
 
 KEY = settings.KEY
 TOKEN = settings.TOKEN
-LISTEN_LIST = settings.LISTEN_LIST
-BUY_LIST = settings.BUY_LIST
 
 ACTIONS: List[Action] = [
     Action("k", "[K]eep", None),
     Action("a", "[A]rchive", TrelloAction({"closed": True})),
-    Action("b", "[B]uy (later)", TrelloAction({"idList": BUY_LIST})),
+    Action("b", "[B]uy (later)", TrelloAction({"idList": settings.BUY_LIST})),
     Action("t", "Move to [t]op", TrelloAction({"pos": "top"})),
     Action("q", "[Q]uit", None),
 ]
@@ -29,26 +31,6 @@ ACTIONS: List[Action] = [
 def print_safe(something: str) -> None:
     """Print a string after encoding / decoding to remove unsafe chars."""
     print(something.encode("ascii", "replace").decode("ascii"))
-
-
-def get_cards(buy: bool) -> List[Card]:
-    """Fetch all cards from the trello list."""
-    list_id = BUY_LIST if buy else LISTEN_LIST
-
-    fields = ["id", "name", "desc", "shortUrl"]
-    params = {
-        "fields": fields,
-        "key": KEY,
-        "token": TOKEN,
-        "attachments": "true",
-        "attachment_fields": ["url"],
-    }
-    url = f"https://api.trello.com/1/lists/{list_id}/cards"
-    response = requests.get(url, params)
-    json_data = response.json()
-    cards = CardDeserializer().from_json(json_data)
-
-    return cards
 
 
 def get_probabilities(length: int) -> List[float]:
@@ -143,35 +125,73 @@ def print_card_stats(cards: Sequence[Card], card: Card) -> None:
 
 def interactive(buy: bool = False, reverse: bool = False) -> None:
     """Fetch cards, show to user, get action, perform action."""
+
+    threads: Set[threading.Thread] = set()
+    card_fetcher = CardFetcher()
+
     while True:
-        cards = get_cards(buy)
+        if buy:
+            cards = card_fetcher.buy_list()
+        else:
+            cards = card_fetcher.listen_list()
+
         if reverse:
             cards.reverse()
+
         card = choose_card(cards)
+        has_track_link = re.search(r"https?://.*/track/", card.desc)
+        has_album_link = re.search(r"https?://.*/album/", card.desc)
+        track_only = has_track_link and not has_album_link
+        announcement_only = re.search(r" just announced \"", card.desc)
+        if track_only:
+            print(f"Skipping track {card.name} {card.short_url}...")
+            action = next(a for a in ACTIONS if a.key == "a")
+        elif announcement_only:
+            print(f"Skipping announcement {card.name} {card.short_url}...")
+            action = next(a for a in ACTIONS if a.key == "a")
+        else:
+            print_card_stats(cards, card)
 
-        print_card_stats(cards, card)
+            try:
+                print_card(card)
+            except UnicodeEncodeError:
+                print("Error printing card", card.short_url)
+                exit()
 
-        try:
-            print_card(card)
-        except UnicodeEncodeError:
-            print("Error printing card", card.short_url)
-            exit()
+            action = get_action_from_user()
 
-        card_url = "https://api.trello.com/1/cards/{}?key={}&token={}".format(
-            card.id, KEY, TOKEN
-        )
-
-        action = get_action_from_user()
         print(action.description)
         sys.stdout.flush()
 
         trello_action = action.trello_action
         if trello_action:
-            requests.put(card_url, json=trello_action.request_data)
+            card_url = "https://api.trello.com/1/cards/{}?key={}&token={}".format(
+                card.id, KEY, TOKEN
+            )
+            thread = threading.Thread(
+                target=requests.put,
+                args=(card_url,),
+                kwargs={"json": trello_action.request_data},
+            )
+            threads.add(thread)
+            thread.start()
+            # card_fetcher.clear_cache()
         elif action.key == "q":
-            exit()
+            break
 
         print("\n" * 16)
+
+        threads = {t for t in threads if t.is_alive()}
+        while len(threads) > 10:
+            print(f"Waiting for {len(threads) - 10} actions to complete")
+            time.sleep(1)
+            threads = {t for t in threads if t.is_alive()}
+
+    threads = {t for t in threads if t.is_alive()}
+    while len(threads) > 0:
+        print(f"Waiting for {len(threads)} actions to complete")
+        time.sleep(1)
+        threads = {t for t in threads if t.is_alive()}
 
 
 def main() -> None:

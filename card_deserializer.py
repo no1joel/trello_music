@@ -36,6 +36,6 @@ class CardDeserializer:
         return CardAttachment(url=url)
 
     def from_json(self, data: Any) -> List[Card]:
-        assert isinstance(data, list)
+        # assert isinstance(data, list)
 
         return list(self._cards(data))
